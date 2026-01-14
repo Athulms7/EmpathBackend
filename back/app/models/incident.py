@@ -1,11 +1,10 @@
-# app/models/incident.py
-
-from sqlalchemy import String, ForeignKey, Float, JSON, DateTime
+from sqlalchemy import String, ForeignKey, Float, DateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.ext.mutable import MutableDict
+from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
 from app.core.database import Base
 import uuid
-
 
 class Incident(Base):
     __tablename__ = "incidents"
@@ -15,11 +14,14 @@ class Incident(Base):
     )
 
     conversation_id: Mapped[str] = mapped_column(
-        ForeignKey("conversations.id"),
-        unique=True
+        ForeignKey("conversations.id"), unique=True
     )
 
-    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    data: Mapped[dict] = mapped_column(
+        MutableDict.as_mutable(JSONB),
+        default=dict
+    )
+
     completion_percentage: Mapped[float] = mapped_column(Float, default=0.0)
     case_summary: Mapped[str | None] = mapped_column(String, nullable=True)
 
@@ -29,7 +31,4 @@ class Incident(Base):
         onupdate=datetime.utcnow
     )
 
-    conversation = relationship(
-        "Conversation",
-        back_populates="incident"
-    )
+    conversation = relationship("Conversation", back_populates="incident")

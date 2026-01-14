@@ -15,6 +15,8 @@ INCIDENT_TEMPLATE = {
     "shared_residence": None,
     "workplace_related": None,
     "ongoing": None,
+    "asked_fields": [],
+    "final_question_asked": False
 }
 
 def merge_entities(existing, extracted):

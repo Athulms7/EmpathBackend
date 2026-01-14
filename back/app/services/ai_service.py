@@ -46,3 +46,25 @@ async def stream_ai_response(prompt: str):
         if token:
             yield token
             await asyncio.sleep(0)
+
+
+def call_mistral(prompt: str) -> str:
+    payload = {
+        "prompt": f"<s>[INST] {prompt} [/INST]",
+        "n_predict": 300,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "stream": False
+    }
+
+    response = requests.post(
+        LLAMA_URL,
+        json=payload,
+        headers={"Content-Type": "application/json"},
+        timeout=60
+    )
+
+    response.raise_for_status()
+    data = response.json()
+
+    return data.get("content", "").strip()
