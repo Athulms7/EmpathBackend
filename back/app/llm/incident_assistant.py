@@ -189,16 +189,55 @@ def summarize_incident(data: dict) -> str:
     return " ".join(parts)
 
 
+# def generate_next_question(incident_data: dict) -> str | None:
+#     asked = incident_data.get("asked_fields", [])
+
+#     missing = [
+#         k for k, v in incident_data.items()
+#         if v is None and k not in ("asked_fields", "final_question_asked")
+#     ]
+
+#     if not missing:
+#         return None
+
+#     prompt = f"""
+# You are a calm, empathetic legal intake assistant.
+
+# Known information:
+# {json.dumps({k: v for k, v in incident_data.items() if v is not None}, indent=2)}
+
+# Missing information:
+# {missing}
+
+# Instructions:
+# - Ask ONLY ONE question
+# - Ask the most important missing detail
+# - Be empathetic and non-judgmental
+# - Do not mention forms, fields, or databases
+# """
+
+#     question = call_mistral(prompt).strip()
+
+#     # remember that we asked about something (reassign list!)
+#     incident_data["asked_fields"] = asked + [missing[0]]
+
+#     return question
 def generate_next_question(incident_data: dict) -> str | None:
     asked = incident_data.get("asked_fields", [])
 
+    # 🔴 EXCLUDE ALREADY ASKED FIELDS
     missing = [
         k for k, v in incident_data.items()
-        if v is None and k not in ("asked_fields", "final_question_asked")
+        if v is None
+        and k not in asked
+        and k not in ("asked_fields", "final_question_asked")
     ]
 
     if not missing:
         return None
+
+    # Choose the MOST IMPORTANT missing field (first is OK for now)
+    field_to_ask = missing[0]
 
     prompt = f"""
 You are a calm, empathetic legal intake assistant.
@@ -211,15 +250,15 @@ Missing information:
 
 Instructions:
 - Ask ONLY ONE question
-- Ask the most important missing detail
+- Ask specifically about: "{field_to_ask}"
 - Be empathetic and non-judgmental
-- Do not mention forms, fields, or databases
+- Do NOT mention databases or fields
 """
 
     question = call_mistral(prompt).strip()
 
-    # remember that we asked about something (reassign list!)
-    incident_data["asked_fields"] = asked + [missing[0]]
+    # 🔴 IMPORTANT: reassign list (not append)
+    incident_data["asked_fields"] = asked + [field_to_ask]
 
     return question
 

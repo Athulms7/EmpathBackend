@@ -15,7 +15,9 @@ from app.services.incident_service import (
 from app.llm.incident_assistant import (
     extract_entities,
     ask_question,
-    summarize_incident
+    summarize_incident,
+    generate_next_question,
+    empathetic_response
 )
 import json
 import requests
@@ -195,17 +197,16 @@ def send_message(
     # STREAMING GENERATOR (SSE)
     # ----------------------------------------------------
     async def stream():
-        # 🔹 CASE 1: < 80% → ASK QUESTION
-        if incident.completion_percentage < 0.8:
-            question = ask_question(incident.data)
 
-            # Persist asked_fields / final_question_asked
+        # 🔹 INTAKE PHASE
+        if incident.completion_percentage < 0.7:
+            question = generate_next_question(incident.data)
+
             db.add(incident)
             db.commit()
             db.refresh(incident)
 
-            # Save assistant message ONLY if question exists
-            if question is not None:
+            if question:
                 db.add(Message(
                     conversation_id=id,
                     role="assistant",
@@ -216,24 +217,26 @@ def send_message(
             yield f"data: {json.dumps({'content': question or '', 'done': True})}\n\n"
             return
 
-        # 🔹 CASE 2: ≥ 80% → STREAM SUMMARY
-        prompt = f"""
-Generate a clear, neutral, factual summary of the case.
-Do not assume missing information.
+        # 🔹 SUMMARY PHASE (ONLY ONCE)
+        if not incident.case_summary:
+            prompt = f"""
+        Generate a clear, neutral, factual summary of the case.
+        Do not assume missing information.
 
-Incident Data:
-{json.dumps(incident.data, indent=2)}
-"""
+        Incident Data:
+        {json.dumps(incident.data, indent=2)}
+        """
 
-        collected = ""
+            summary = stream_ai_response(prompt)
 
-        async for token in stream_ai_response(prompt):
-            collected += token
-            yield f"data: {json.dumps({'content': token, 'done': False})}\n\n"
+            if not summary.strip():
+                summary = (
+                    "Based on the information shared, a partial incident summary "
+                    "can be prepared, though some details remain unspecified."
+                )
 
-        # Save summary only if non-empty
-        if collected.strip():
-            incident.case_summary = collected.strip()
+            incident.case_summary = summary.strip()
+
             db.add(incident)
             db.add(Message(
                 conversation_id=id,
@@ -242,7 +245,23 @@ Incident Data:
             ))
             db.commit()
 
-        yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
+            # send summary as a single SSE message
+            yield f"data: {json.dumps({'content': incident.case_summary, 'done': True})}\n\n"
+            return
+
+
+
+        # 🔹 SUPPORT / EMPATHY PHASE (FOREVER)
+        reply = empathetic_response(user_text, incident.case_summary)
+
+        db.add(Message(
+            conversation_id=id,
+            role="assistant",
+            content=reply
+        ))
+        db.commit()
+
+        yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
 
     return StreamingResponse(
         stream(),
@@ -252,6 +271,7 @@ Incident Data:
             "Connection": "keep-alive",
         }
     )
+
 
 
     

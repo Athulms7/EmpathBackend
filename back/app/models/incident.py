@@ -1,4 +1,4 @@
-from sqlalchemy import String, ForeignKey, Float, DateTime
+from sqlalchemy import String, ForeignKey, Float, DateTime,Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.dialects.postgresql import JSONB
@@ -23,7 +23,8 @@ class Incident(Base):
     )
 
     completion_percentage: Mapped[float] = mapped_column(Float, default=0.0)
-    case_summary: Mapped[str | None] = mapped_column(String, nullable=True)
+    case_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
     created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
