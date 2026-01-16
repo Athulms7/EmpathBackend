@@ -1,14 +1,8 @@
-# import asyncio
-
-# async def stream_ai_response(prompt: str):
-#     fake_response = "This is a streamed AI response generated token by token."
-#     for word in fake_response.split():
-#         yield word + " "
-#         await asyncio.sleep(0.2)
-
 import asyncio
 import json
 import requests
+import os
+from app.core.config import settings
 
 LLAMA_URL = "http://localhost:8081/completion"
 
@@ -68,3 +62,44 @@ def call_mistral(prompt: str) -> str:
     data = response.json()
 
     return data.get("content", "").strip()
+
+
+# OPENROUTER_API_KEY = settings.OPENROUTER_API_KEY
+# OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+# def call_mistral(prompt: str) -> str:
+#     try:
+#         print("In openai call_mistral")
+#         response = requests.post(
+#             "https://openrouter.ai/api/v1/chat/completions",
+#             headers={
+#                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+#                 "Content-Type": "application/json",
+#             },
+#             json={
+#                 "model": "mistralai/mistral-7b-instruct:free",
+#                 "messages": [{"role": "user", "content": prompt}],
+#             },
+#             timeout=20,
+#         )
+
+#         if response.status_code != 200:
+#             print("⚠️ OpenRouter non-200:", response.status_code)
+#             return ""
+
+#         data = response.json()
+#         content = (
+#             data.get("choices", [{}])[0]
+#             .get("message", {})
+#             .get("content", "")
+#             .strip()
+#         )
+
+#         if not content:
+#             print("⚠️ OpenRouter returned empty output")
+
+#         return content
+
+#     except Exception as e:
+#         print("⚠️ OpenRouter call failed:", e)
+#         return ""

@@ -1,11 +1,12 @@
-
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 from app.api import auth
 from app.api import conversations
 from app.api import user
-from app.core.database import Base, engine
-from fastapi.middleware.cors import CORSMiddleware
+from app.api import analyze  
 
+from app.core.database import Base, engine
 
 Base.metadata.create_all(bind=engine)
 
@@ -22,11 +23,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# ===== Existing routes =====
 app.include_router(auth.router)
 app.include_router(conversations.router)
 app.include_router(user.router)
 
+# ===== NEW analyze route =====
+app.include_router(analyze.router)
 
 @app.get("/")
 def health():
