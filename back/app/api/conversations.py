@@ -6,7 +6,7 @@ from app.core.database import get_db
 from app.models.conversation import Conversation
 from app.models.message import Message
 from app.models.incident import Incident
-from app.services.ai_service import stream_ai_response
+from app.services.ai_service import call_mistral
 from app.services.incident_service import (
     INCIDENT_TEMPLATE,
     merge_entities,
@@ -227,7 +227,7 @@ def send_message(
         {json.dumps(incident.data, indent=2)}
         """
 
-            summary = stream_ai_response(prompt)
+            summary = call_mistral(prompt)
 
             if not summary.strip():
                 summary = (
