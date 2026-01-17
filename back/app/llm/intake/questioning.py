@@ -1,11 +1,13 @@
 def generate_next_question(incident_data: dict) -> str | None:
     asked = incident_data.get("asked_fields", [])
 
-    questions = [
-        ("crime_location", "Where does this usually take place?"),
-        ("time_period", "When did this begin?"),
+    priority_questions = [
+        ("crime_location", "Where does this incident usually take place?"),
+        ("time_period", "When did this situation first begin?"),
         ("frequency", "How often does this happen?"),
-        ("witnesses", "Was anyone else aware of this?")
+        ("witnesses", "Was anyone else present or aware of what happened?"),
+        ("evidence_available", "Do you have any evidence such as messages or recordings?"),
+        ("injury_present", "Have you been physically injured in any way?")
     ]
 
     for field, question in questions:

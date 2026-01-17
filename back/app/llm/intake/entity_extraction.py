@@ -1,41 +1,51 @@
+from app.services.ai_service import call_mistral
 import json
-import requests
-
-LLAMA_URL = "http://localhost:8081/completion"
 
 ENTITY_KEYS = [
-    "relationship_to_accused", "crime_location", "time_period",
-    "frequency", "witnesses", "threat_present",
-    "injury_present", "evidence_available", "ongoing"
+    "suspect",
+    "relationship_to_accused",
+    "crime_location",
+    "time_period",
+    "frequency",
+    "witnesses",
+    "threat_present",
+    "injury_present",
+    "identity_known",
+    "evidence_available",
+    "medium",
+    "secondary_action",
+    "consent_present",
+    "shared_residence",
+    "workplace_related",
+    "ongoing",
 ]
-
 
 def extract_entities(message: str) -> dict:
     prompt = f"""
-Extract factual entities from the message.
+You are an information extraction system.
 
-Rules:
-- Output ONLY JSON
-- Do not guess
+RULES:
+- Return ONLY valid JSON
+- Do NOT guess
 - Omit missing fields
 
-Allowed keys:
+ALLOWED KEYS:
 {ENTITY_KEYS}
 
-Message:
+MESSAGE:
 "{message}"
+
+OUTPUT JSON ONLY:
 """
 
-    payload = {
-        "prompt": f"<s>[INST] {prompt} [/INST]",
-        "temperature": 0.0,
-        "n_predict": 300
-    }
-
     try:
-        res = requests.post(LLAMA_URL, json=payload, timeout=60)
-        raw = res.json()["content"]
+        raw = call_mistral(prompt, temperature=0.0)
+
+        raw = raw.replace("```json", "").replace("```", "").strip()
         data = json.loads(raw)
+
         return {k: v for k, v in data.items() if k in ENTITY_KEYS}
-    except Exception:
+
+    except Exception as e:
+        print("Entity extraction failed:", e)
         return {}
