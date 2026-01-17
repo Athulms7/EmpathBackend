@@ -100,6 +100,96 @@ def translate_ml_to_en(text: str) -> str:
 
 # route to handle english text only rest all handles by coversation/messages route 
 # by data from front
+# @router.post("/{conversation_id}/audio")
+# async def analyze_audio(
+#     conversation_id: str,
+#     file: UploadFile = File(...),
+#     user=Depends(get_current_user),
+#     db: Session = Depends(get_db),
+# ):
+#     temp_file = f"tmp_{uuid.uuid4()}.wav"
+
+#     # 1️⃣ Save uploaded audio
+#     with open(temp_file, "wb") as buffer:
+#         shutil.copyfileobj(file.file, buffer)
+
+#     try:
+#         # 2️⃣ English speech → text
+#         transcribed_text = speech_to_text_en(temp_file)
+#         # transcribed_text = "i have been beaten up"
+
+#         if not transcribed_text:
+#             raise HTTPException(status_code=400, detail="Empty transcription")
+
+#         # 3️⃣ Emotion from HuBERT (audio-based)
+#         emotion = predict_speech_emotion(temp_file)
+
+#         # 4️⃣ Store REAL text in conversation (CRITICAL)
+#         handle_text_message(
+#             conversation_id=conversation_id,
+#             user_text=transcribed_text,
+#             user=user,
+#             db=db,
+#         )
+
+#         # 5️⃣ Respond to frontend
+#         return {
+#             "input_type": "english_audio",
+#             "transcribed_text": transcribed_text,
+#             "emotion": emotion,
+#         }
+
+#     finally:
+#         if os.path.exists(temp_file):
+#             os.remove(temp_file)
+
+from app.services.conv_services import process_user_message
+# @router.post("/{conversation_id}/audio")
+# async def analyze_audio(
+#     conversation_id: str,
+#     file: UploadFile = File(...),
+#     user=Depends(get_current_user),
+#     db: Session = Depends(get_db),
+# ):
+#     temp_file = f"tmp_{uuid.uuid4()}.wav"
+
+#     with open(temp_file, "wb") as buffer:
+#         shutil.copyfileobj(file.file, buffer)
+
+#     try:
+#         # 1️⃣ Speech → Text
+#         transcribed_text = speech_to_text_en(temp_file)
+#         if not transcribed_text:
+#             raise HTTPException(status_code=400, detail="Empty transcription")
+
+#         # 2️⃣ Emotion
+#         emotion = predict_speech_emotion(temp_file)
+
+#         # 3️⃣ SAME PIPELINE AS TEXT
+#         result = await process_user_message(
+#             conversation_id=conversation_id,
+#             user_text=transcribed_text,
+#             user=user,
+#             db=db,
+#         )
+
+#         return {
+#             "input_type": "english_audio",
+#             "transcribed_text": transcribed_text,
+#             "emotion": emotion,
+#             "assistant_reply": result["reply"],
+#             "phase": result["phase"],
+#         }
+
+#     finally:
+#         if os.path.exists(temp_file):
+#             os.remove(temp_file)
+
+
+from fastapi.responses import StreamingResponse
+import json
+import asyncio
+
 @router.post("/{conversation_id}/audio")
 async def analyze_audio(
     conversation_id: str,
@@ -109,35 +199,44 @@ async def analyze_audio(
 ):
     temp_file = f"tmp_{uuid.uuid4()}.wav"
 
-    # 1️⃣ Save uploaded audio
     with open(temp_file, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
     try:
-        # 2️⃣ English speech → text
-        # transcribed_text = speech_to_text_en(temp_file)
-        transcribed_text = "i have been beaten up"
-
+        # 1️⃣ Speech → Text
+        transcribed_text = speech_to_text_en(temp_file)
         if not transcribed_text:
             raise HTTPException(status_code=400, detail="Empty transcription")
 
-        # 3️⃣ Emotion from HuBERT (audio-based)
+        # 2️⃣ Emotion
         emotion = predict_speech_emotion(temp_file)
 
-        # 4️⃣ Store REAL text in conversation (CRITICAL)
-        handle_text_message(
+        # 3️⃣ Process message (same as text)
+        result = await process_user_message(
             conversation_id=conversation_id,
             user_text=transcribed_text,
             user=user,
             db=db,
         )
 
-        # 5️⃣ Respond to frontend
-        return {
-            "input_type": "english_audio",
-            "transcribed_text": transcribed_text,
-            "emotion": emotion,
-        }
+        assistant_reply = result["reply"]
+
+        # 4️⃣ STREAM RESPONSE (SSE)
+        async def event_generator():
+            # Optional: send transcription to frontend
+            yield f"data: {json.dumps({'transcript': transcribed_text})}\n\n"
+
+            # Stream assistant reply token by token
+            for token in assistant_reply.split():
+                yield f"data: {json.dumps({'content': token + ' '})}\n\n"
+                await asyncio.sleep(0.03)
+
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+        )
 
     finally:
         if os.path.exists(temp_file):

@@ -19,6 +19,7 @@ from app.llm.incident_assistant import (
     generate_next_question,
     empathetic_response
 )
+from app.services.conv_services import process_user_message
 import json
 import requests
 import asyncio
@@ -73,24 +74,6 @@ def get_messages(id: str, user=Depends(get_current_user), db: Session = Depends(
     }
 
 # @router.post("/{id}/messages")
-# def send_message(id: str, body: dict, user=Depends(get_current_user), db: Session = Depends(get_db)):
-#     user_msg = Message(conversation_id=id, role="user", content=body["content"])
-#     db.add(user_msg)
-#     db.commit()
-
-#     async def stream():
-#         full = ""
-#         async for chunk in stream_ai_response(body["content"]):
-#             full += chunk
-#             yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
-#         db.add(Message(conversation_id=id, role="assistant", content=full))
-#         db.commit()
-#         yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
-
-#     return StreamingResponse(stream(), media_type="text/event-stream")
-
-
-# @router.post("/{id}/messages")
 # def send_message(
 #     id: str,
 #     body: dict,
@@ -99,47 +82,109 @@ def get_messages(id: str, user=Depends(get_current_user), db: Session = Depends(
 # ):
 #     user_text = body.get("content", "").strip()
 #     if not user_text:
-#         return {"error": "Empty message"}
+#         raise HTTPException(status_code=400, detail="Empty message")
 
-#     # 1️⃣ Save USER message to DB
-#     user_msg = Message(
+#     # 1️⃣ Validate conversation
+#     conversation = db.query(Conversation).filter_by(id=id).first()
+#     if not conversation:
+#         raise HTTPException(status_code=404, detail="Conversation not found")
+
+#     # 2️⃣ Save USER message
+#     db.add(Message(
 #         conversation_id=id,
 #         role="user",
 #         content=user_text
-#     )
-#     db.add(user_msg)
+#     ))
 #     db.commit()
 
-#     # 2️⃣ Streaming generator
+#     # 3️⃣ Load or create Incident
+#     incident = db.query(Incident).filter_by(conversation_id=id).first()
+#     if not incident:
+#         incident = Incident(
+#             conversation_id=id,
+#             data=INCIDENT_TEMPLATE.copy()
+#         )
+#         db.add(incident)
+#         db.commit()
+#         db.refresh(incident)
+
+#     # 4️⃣ Extract + merge entities (FIRST MESSAGE INCLUDED)
+#     extracted = extract_entities(user_text, incident.data)
+#     incident.data = merge_entities(dict(incident.data), extracted)
+#     incident.completion_percentage = completion_percentage(incident.data)
+#     db.add(incident)
+#     db.commit()
+#     db.refresh(incident)
+
+#     # ----------------------------------------------------
+#     # STREAMING GENERATOR (SSE)
+#     # ----------------------------------------------------
 #     async def stream():
-#         # ---- CALL MODEL ONCE (blocking, but safe) ----
-#         try:
-#             ai_reply = call_llama(user_text,"legal")   # ← YOUR WORKING MODEL CALL
-#         except Exception as e:
-#             yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+
+#         # 🔹 INTAKE PHASE
+#         if incident.completion_percentage < 0.7:
+#             question = generate_next_question(incident.data)
+
+#             db.add(incident)
+#             db.commit()
+#             db.refresh(incident)
+
+#             if question:
+#                 db.add(Message(
+#                     conversation_id=id,
+#                     role="assistant",
+#                     content=question
+#                 ))
+#                 db.commit()
+
+#             yield f"data: {json.dumps({'content': question or '', 'done': True})}\n\n"
 #             return
 
-#         full_response = ""
+#         # 🔹 SUMMARY PHASE (ONLY ONCE)
+#         if not incident.case_summary:
+#             prompt = f"""
+#         Generate a clear, neutral, factual summary of the case.
+#         Do not assume missing information.
 
-#         # 3️⃣ PSEUDO-STREAM word by word
-#         for word in ai_reply.split():
-#             chunk = word + " "
-#             full_response += chunk
+#         Incident Data:
+#         {json.dumps(incident.data, indent=2)}
+#         """
 
-#             yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
-#             await asyncio.sleep(0.04)  # typing effect
+#             summary = call_mistral(prompt)
 
-#         # 4️⃣ Save ASSISTANT message to DB
-#         assistant_msg = Message(
+#             if not summary.strip():
+#                 summary = (
+#                     "Based on the information shared, a partial incident summary "
+#                     "can be prepared, though some details remain unspecified."
+#                 )
+
+#             incident.case_summary = summary.strip()
+
+#             db.add(incident)
+#             db.add(Message(
+#                 conversation_id=id,
+#                 role="assistant",
+#                 content=incident.case_summary
+#             ))
+#             db.commit()
+
+#             # send summary as a single SSE message
+#             yield f"data: {json.dumps({'content': incident.case_summary, 'done': True})}\n\n"
+#             return
+
+
+
+#         # 🔹 SUPPORT / EMPATHY PHASE (FOREVER)
+#         reply = empathetic_response(user_text, incident.case_summary)
+
+#         db.add(Message(
 #             conversation_id=id,
 #             role="assistant",
-#             content=full_response.strip()
-#         )
-#         db.add(assistant_msg)
+#             content=reply
+#         ))
 #         db.commit()
 
-#         # 5️⃣ End stream
-#         yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
+#         yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
 
 #     return StreamingResponse(
 #         stream(),
@@ -150,8 +195,9 @@ def get_messages(id: str, user=Depends(get_current_user), db: Session = Depends(
 #         }
 #     )
 
+
 @router.post("/{id}/messages")
-def send_message(
+async def send_message(
     id: str,
     body: dict,
     user=Depends(get_current_user),
@@ -161,107 +207,15 @@ def send_message(
     if not user_text:
         raise HTTPException(status_code=400, detail="Empty message")
 
-    # 1️⃣ Validate conversation
-    conversation = db.query(Conversation).filter_by(id=id).first()
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    # 2️⃣ Save USER message
-    db.add(Message(
-        conversation_id=id,
-        role="user",
-        content=user_text
-    ))
-    db.commit()
-
-    # 3️⃣ Load or create Incident
-    incident = db.query(Incident).filter_by(conversation_id=id).first()
-    if not incident:
-        incident = Incident(
-            conversation_id=id,
-            data=INCIDENT_TEMPLATE.copy()
-        )
-        db.add(incident)
-        db.commit()
-        db.refresh(incident)
-
-    # 4️⃣ Extract + merge entities (FIRST MESSAGE INCLUDED)
-    extracted = extract_entities(user_text, incident.data)
-    incident.data = merge_entities(dict(incident.data), extracted)
-    incident.completion_percentage = completion_percentage(incident.data)
-    db.add(incident)
-    db.commit()
-    db.refresh(incident)
-
-    # ----------------------------------------------------
-    # STREAMING GENERATOR (SSE)
-    # ----------------------------------------------------
     async def stream():
-
-        # 🔹 INTAKE PHASE
-        if incident.completion_percentage < 0.7:
-            question = generate_next_question(incident.data)
-
-            db.add(incident)
-            db.commit()
-            db.refresh(incident)
-
-            if question:
-                db.add(Message(
-                    conversation_id=id,
-                    role="assistant",
-                    content=question
-                ))
-                db.commit()
-
-            yield f"data: {json.dumps({'content': question or '', 'done': True})}\n\n"
-            return
-
-        # 🔹 SUMMARY PHASE (ONLY ONCE)
-        if not incident.case_summary:
-            prompt = f"""
-        Generate a clear, neutral, factual summary of the case.
-        Do not assume missing information.
-
-        Incident Data:
-        {json.dumps(incident.data, indent=2)}
-        """
-
-            summary = call_mistral(prompt)
-
-            if not summary.strip():
-                summary = (
-                    "Based on the information shared, a partial incident summary "
-                    "can be prepared, though some details remain unspecified."
-                )
-
-            incident.case_summary = summary.strip()
-
-            db.add(incident)
-            db.add(Message(
-                conversation_id=id,
-                role="assistant",
-                content=incident.case_summary
-            ))
-            db.commit()
-
-            # send summary as a single SSE message
-            yield f"data: {json.dumps({'content': incident.case_summary, 'done': True})}\n\n"
-            return
-
-
-
-        # 🔹 SUPPORT / EMPATHY PHASE (FOREVER)
-        reply = empathetic_response(user_text, incident.case_summary)
-
-        db.add(Message(
+        result = await process_user_message(
             conversation_id=id,
-            role="assistant",
-            content=reply
-        ))
-        db.commit()
+            user_text=user_text,
+            user=user,
+            db=db,
+        )
 
-        yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
+        yield f"data: {json.dumps({'content': result['reply'], 'done': True})}\n\n"
 
     return StreamingResponse(
         stream(),
