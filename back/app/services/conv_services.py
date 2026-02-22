@@ -1,16 +1,11 @@
-# stdlib
-import json
 
-# fastapi
+import json
 from fastapi import HTTPException
 
-# sqlalchemy
 from sqlalchemy.orm import Session
 
-# app models
 from app.models import Conversation, Message, Incident
 
-# app constants / templates
 from app.services.incident_service import INCIDENT_TEMPLATE
 
 # NLP / AI logic
@@ -19,10 +14,13 @@ from app.services.incident_service import completion_percentage
 from app.llm.incident_assistant import generate_next_question,extract_entities
 from app.services.ai_service import call_mistral
 from app.llm.incident_assistant import empathetic_response
-
+from langdetect import detect
+from deep_translator import GoogleTranslator
 async def process_user_message(
     *,
+    emotion:str,
     conversation_id: str,
+    normalized_text:str,
     user_text: str,
     user,
     db: Session,
@@ -55,7 +53,7 @@ async def process_user_message(
         db.refresh(incident)
 
     # 4️⃣ Extract + merge entities
-    extracted = extract_entities(user_text, incident.data)
+    extracted = extract_entities(normalized_text, incident.data)
     incident.data = merge_entities(dict(incident.data), extracted)
     incident.completion_percentage = completion_percentage(incident.data)
 
@@ -66,7 +64,6 @@ async def process_user_message(
     # 🔹 INTAKE PHASE
     if incident.completion_percentage < 0.7:
         question = generate_next_question(incident.data)
-
         if question:
             db.add(Message(
                 conversation_id=conversation_id,
@@ -125,4 +122,27 @@ Incident Data:
     return {
         "phase": "support",
         "reply": reply
+    }
+
+
+
+
+def normalize_text(text: str) -> dict:
+    try:
+        lang = detect(text)
+    except Exception:
+        lang = "unknown"
+
+    if lang != "en":
+        translated = GoogleTranslator(
+            source=lang,
+            target="en"
+        ).translate(text)
+    else:
+        translated = text
+
+    return {
+        "original_text": text,
+        "english_text": translated,
+        "language": lang
     }

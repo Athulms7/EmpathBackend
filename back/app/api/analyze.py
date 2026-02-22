@@ -38,6 +38,66 @@ def translate_ml_to_en(text: str) -> str:
     return GoogleTranslator(source="ml", target="en").translate(text)
 
 
+
+from fastapi.responses import StreamingResponse
+import json
+import asyncio
+
+@router.post("/{conversation_id}/audio")
+async def analyze_audio(
+    conversation_id: str,
+    file: UploadFile = File(...),
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    temp_file = f"tmp_{uuid.uuid4()}.wav"
+
+    with open(temp_file, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        # 1️⃣ Speech → Text
+        transcribed_text = speech_to_text_en(temp_file)
+        if not transcribed_text:
+            raise HTTPException(status_code=400, detail="Empty transcription")
+
+        # 2️⃣ Emotion
+        emotion = predict_speech_emotion(temp_file)
+        print("Emotion Detected:",emotion)
+        # 3️⃣ Process message (same as text)
+        result = await process_user_message(
+            emotion=emotion,
+            conversation_id=conversation_id,
+            user_text=transcribed_text,
+            user=user,
+            db=db,
+        )
+
+        assistant_reply = result["reply"]
+
+        # 4️⃣ STREAM RESPONSE (SSE)
+        async def event_generator():
+            # Optional: send transcription to frontend
+            yield f"data: {json.dumps({'transcript': transcribed_text})}\n\n"
+
+            # Stream assistant reply token by token
+            for token in assistant_reply.split():
+                yield f"data: {json.dumps({'content': token + ' '})}\n\n"
+                await asyncio.sleep(0.03)
+
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+        )
+
+    finally:
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
+
+
+
 # @router.post("/{conversation_id}/audio")
 # async def analyze_audio(
 #     conversation_id: str,
@@ -184,60 +244,3 @@ from app.services.conv_services import process_user_message
 #     finally:
 #         if os.path.exists(temp_file):
 #             os.remove(temp_file)
-
-
-from fastapi.responses import StreamingResponse
-import json
-import asyncio
-
-@router.post("/{conversation_id}/audio")
-async def analyze_audio(
-    conversation_id: str,
-    file: UploadFile = File(...),
-    user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    temp_file = f"tmp_{uuid.uuid4()}.wav"
-
-    with open(temp_file, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    try:
-        # 1️⃣ Speech → Text
-        transcribed_text = speech_to_text_en(temp_file)
-        if not transcribed_text:
-            raise HTTPException(status_code=400, detail="Empty transcription")
-
-        # 2️⃣ Emotion
-        emotion = predict_speech_emotion(temp_file)
-
-        # 3️⃣ Process message (same as text)
-        result = await process_user_message(
-            conversation_id=conversation_id,
-            user_text=transcribed_text,
-            user=user,
-            db=db,
-        )
-
-        assistant_reply = result["reply"]
-
-        # 4️⃣ STREAM RESPONSE (SSE)
-        async def event_generator():
-            # Optional: send transcription to frontend
-            yield f"data: {json.dumps({'transcript': transcribed_text})}\n\n"
-
-            # Stream assistant reply token by token
-            for token in assistant_reply.split():
-                yield f"data: {json.dumps({'content': token + ' '})}\n\n"
-                await asyncio.sleep(0.03)
-
-            yield f"data: {json.dumps({'done': True})}\n\n"
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-        )
-
-    finally:
-        if os.path.exists(temp_file):
-            os.remove(temp_file)

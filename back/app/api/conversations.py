@@ -19,7 +19,8 @@ from app.llm.incident_assistant import (
     generate_next_question,
     empathetic_response
 )
-from app.services.conv_services import process_user_message
+from app.llm.roberta import predict_emotion
+from app.services.conv_services import normalize_text, process_user_message
 import json
 import requests
 import asyncio
@@ -206,10 +207,16 @@ async def send_message(
     user_text = body.get("content", "").strip()
     if not user_text:
         raise HTTPException(status_code=400, detail="Empty message")
-
+    normalized = normalize_text(user_text)
+    print(normalized)
+    # emotion=predict_emotion(normalized["english_text"])
+    emotion="Depressed"
+    # print("Emotion Detected:",emotion)
     async def stream():
         result = await process_user_message(
+            emotion=emotion,
             conversation_id=id,
+            normalized_text=normalized,
             user_text=user_text,
             user=user,
             db=db,

@@ -188,40 +188,6 @@ def summarize_incident(data: dict) -> str:
 
     return " ".join(parts)
 
-
-# def generate_next_question(incident_data: dict) -> str | None:
-#     asked = incident_data.get("asked_fields", [])
-
-#     missing = [
-#         k for k, v in incident_data.items()
-#         if v is None and k not in ("asked_fields", "final_question_asked")
-#     ]
-
-#     if not missing:
-#         return None
-
-#     prompt = f"""
-# You are a calm, empathetic legal intake assistant.
-
-# Known information:
-# {json.dumps({k: v for k, v in incident_data.items() if v is not None}, indent=2)}
-
-# Missing information:
-# {missing}
-
-# Instructions:
-# - Ask ONLY ONE question
-# - Ask the most important missing detail
-# - Be empathetic and non-judgmental
-# - Do not mention forms, fields, or databases
-# """
-
-#     question = call_mistral(prompt).strip()
-
-#     # remember that we asked about something (reassign list!)
-#     incident_data["asked_fields"] = asked + [missing[0]]
-
-#     return question
 def generate_next_question(incident_data: dict) -> str | None:
     asked = incident_data.get("asked_fields", [])
 
@@ -242,9 +208,6 @@ def generate_next_question(incident_data: dict) -> str | None:
     prompt = f"""
 You are a calm, empathetic legal intake assistant.
 
-Known information:
-{json.dumps({k: v for k, v in incident_data.items() if v is not None}, indent=2)}
-
 Missing information:
 {missing}
 
@@ -253,16 +216,74 @@ Instructions:
 - Ask specifically about: "{field_to_ask}"
 - Be empathetic and non-judgmental
 - Do NOT mention databases or fields
+
+Ask a natural human question to collect it.
 """
 
     question = call_mistral(prompt).strip()
-
+    print("RAW MISTRAL OUTPUT:", repr(question))
     # 🔴 IMPORTANT: reassign list (not append)
     incident_data["asked_fields"] = asked + [field_to_ask]
-
+    
     return question
 
+#this also works but with a check to give answer even without qns..
+# def generate_next_question(incident_data: dict) -> str | None:
+#     asked = incident_data.get("asked_fields", [])
 
+#     missing = [
+#         k for k, v in incident_data.items()
+#         if v is None
+#         and k not in asked
+#         and k not in ("asked_fields", "final_question_asked")
+#     ]
+
+#     if not missing:
+#         return None
+
+#     field_to_ask = missing[0]
+
+#     prompt = f"""
+# You are a human legal intake assistant.
+
+# IMPORTANT RULES:
+# - Respond ONLY in plain English.
+# - DO NOT return JSON.
+# - DO NOT return key-value pairs.
+# - DO NOT return structured data.
+# - Ask exactly ONE question.
+# - Do NOT explain anything.
+
+# You need to collect information about: {field_to_ask}
+
+# Example:
+# If the missing field is "incident_date", you should respond:
+# "When did the incident occur?"
+
+# Now generate the question.
+# """
+
+#     question = call_mistral(prompt).strip()
+
+#     print("RAW MISTRAL OUTPUT:", repr(question))
+
+#     # 🚨 If model still outputs JSON → fallback
+#     if question.startswith("{") or ":" in question:
+#         fallback_map = {
+#             "incident_date": "When did the incident occur?",
+#             "location": "Where did the incident happen?",
+#             "description": "Could you describe what happened?",
+#             "identity_known": "Do you know who the person was?",
+#             "crime_type": "Can you clarify what type of incident occurred?",
+#         }
+#         question = fallback_map.get(
+#             field_to_ask,
+#             "Could you please provide more details?"
+#         )
+
+#     incident_data["asked_fields"] = asked + [field_to_ask]
+
+#     return question
 
 def empathetic_response(user_text: str, incident_summary: str) -> str:
     prompt = f"""
