@@ -16,14 +16,20 @@ INCIDENT_TEMPLATE = {
     "workplace_related": None,
     "ongoing": None,
     "asked_fields": [],
+    "question_attempts": {},
     "final_question_asked": False
 }
 
-def merge_entities(existing, extracted):
-    for k, v in extracted.items():
-        if v is not None and existing.get(k) is None:
-            existing[k] = v
-    return existing
+# def merge_entities(existing, extracted):
+#     for k, v in extracted.items():
+#         if v is not None and existing.get(k) is None:
+#             existing[k] = v
+#     return existing
+def merge_entities(current, new):
+    for k, v in new.items():
+        if v not in [None, "", "unknown"]:
+            current[k] = v
+    return current
 
 def completion_percentage(data):
     total = len(data)

@@ -12,7 +12,7 @@ Responsibilities:
 # -----------------------------
 import json
 import requests
-from app.services.ai_service import call_mistral 
+from app.services.ai_service import call_groq, call_mistral 
 LLAMA_URL = "http://localhost:8081/completion"
 
 ENTITY_KEYS = [
@@ -188,45 +188,98 @@ def summarize_incident(data: dict) -> str:
 
     return " ".join(parts)
 
-def generate_next_question(incident_data: dict) -> str | None:
-    asked = incident_data.get("asked_fields", [])
+# def generate_next_question(incident_data: dict) -> str | None:
+#     asked = incident_data.get("asked_fields", [])
 
-    # 🔴 EXCLUDE ALREADY ASKED FIELDS
+#     # 🔴 EXCLUDE ALREADY ASKED FIELDS
+#     missing = [
+#         k for k, v in incident_data.items()
+#         if v is None
+#         and k not in asked
+#         and k not in ("asked_fields", "final_question_asked")
+#     ]
+
+#     if not missing:
+#         return None
+
+#     # Choose the MOST IMPORTANT missing field (first is OK for now)
+#     field_to_ask = missing[0]
+
+#     prompt = f"""
+# You are a calm, empathetic legal intake assistant.
+
+# Missing information:
+# {missing}
+
+# Instructions:
+# - Ask ONLY ONE question
+# - Ask specifically about: "{field_to_ask}"
+# - Be empathetic and non-judgmental
+# - Do NOT mention databases or fields
+
+# Ask a natural human question to collect it.
+# """
+
+#     question = call_groq(prompt).strip()
+#     print("RAW MISTRAL OUTPUT:", repr(question))
+#     # 🔴 IMPORTANT: reassign list (not append)
+#     incident_data["asked_fields"] = asked + [field_to_ask]
+    
+#     return question
+
+def generate_next_question(incident_data: dict, user_text: str) -> str | None:
+    attempts = incident_data.get("question_attempts", {})
+
     missing = [
         k for k, v in incident_data.items()
         if v is None
-        and k not in asked
-        and k not in ("asked_fields", "final_question_asked")
+        and k not in ("asked_fields", "question_attempts", "final_question_asked")
     ]
 
     if not missing:
         return None
 
-    # Choose the MOST IMPORTANT missing field (first is OK for now)
-    field_to_ask = missing[0]
+    # Pick highest priority missing field
+    field_to_ask = None
+
+    for field in missing:
+        if attempts.get(field, 0) < 2:
+            field_to_ask = field
+            break
+
+    if not field_to_ask:
+        return None
+    
+    field_attempts = attempts.get(field_to_ask, 0)
 
     prompt = f"""
 You are a calm, empathetic legal intake assistant.
+
+User just said:
+"{user_text}"
+
+Known case data:
+{json.dumps({k: v for k, v in incident_data.items() if v is not None}, indent=2)}
 
 Missing information:
 {missing}
 
 Instructions:
-- Ask ONLY ONE question
-- Ask specifically about: "{field_to_ask}"
-- Be empathetic and non-judgmental
-- Do NOT mention databases or fields
-
-Ask a natural human question to collect it.
+- First respond briefly to the user's last message.
+- Then ask ONE natural follow-up question about "{field_to_ask}".
+- If this is the second attempt, rephrase the question differently.
+- Be formal but compassionate.
+- Do not mention databases or field names.
+- Do not ask multiple questions.
 """
 
-    question = call_mistral(prompt).strip()
-    print("RAW MISTRAL OUTPUT:", repr(question))
-    # 🔴 IMPORTANT: reassign list (not append)
-    incident_data["asked_fields"] = asked + [field_to_ask]
-    
-    return question
+    question = call_groq(prompt).strip()
 
+    # Update tracking
+    attempts[field_to_ask] = field_attempts + 1
+    incident_data["question_attempts"] = attempts
+
+    return question
 #this also works but with a check to give answer even without qns..
 # def generate_next_question(incident_data: dict) -> str | None:
 #     asked = incident_data.get("asked_fields", [])

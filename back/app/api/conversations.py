@@ -19,6 +19,7 @@ from app.llm.incident_assistant import (
     generate_next_question,
     empathetic_response
 )
+from pydantic import BaseModel
 from app.llm.roberta import predict_emotion
 from app.services.conv_services import normalize_text, process_user_message
 import json
@@ -73,6 +74,90 @@ def get_messages(id: str, user=Depends(get_current_user), db: Session = Depends(
         .filter(Conversation.user_id == user.id, Message.conversation_id == id)
         .all()
     }
+
+class RenameConversationSchema(BaseModel):
+    title: str
+
+
+@router.patch("/{conversation_id}")
+async def rename_conversation(
+    conversation_id: str,
+    payload: RenameConversationSchema,
+    db: Session = Depends(get_db),
+):
+    conversation = db.query(Conversation).filter_by(id=conversation_id).first()
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    conversation.title = payload.title.strip()
+    db.commit()
+
+    return {"success": True}    
+
+
+
+@router.post("/{id}/messages")
+async def send_message(
+    id: str,
+    body: dict,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user_text = body.get("content", "").strip()
+    if not user_text:
+        raise HTTPException(status_code=400, detail="Empty message")
+    normalized = normalize_text(user_text)
+    print(normalized)
+    emotion=predict_emotion(normalized["english_text"])
+    # emotion="Depressed"
+    print("Emotion Detected:",emotion)
+    async def stream():
+        result = await process_user_message(
+            emotion=emotion,
+            conversation_id=id,
+            normalized_text=normalized,
+            user_text=user_text,
+            user=user,
+            db=db,
+        )
+
+        yield f"data: {json.dumps({'content': result['reply'], 'done': True})}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+
+    
+@router.delete("/{id}")
+def delete_conversation(
+    id: str,
+    user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.id == id,
+            Conversation.user_id == user.id
+        )
+        .first()
+    )
+
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    db.delete(conversation)
+    db.commit()
+
+    return {"success": True}
+
 
 # @router.post("/{id}/messages")
 # def send_message(
@@ -195,66 +280,3 @@ def get_messages(id: str, user=Depends(get_current_user), db: Session = Depends(
 #             "Connection": "keep-alive",
 #         }
 #     )
-
-
-@router.post("/{id}/messages")
-async def send_message(
-    id: str,
-    body: dict,
-    user=Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    user_text = body.get("content", "").strip()
-    if not user_text:
-        raise HTTPException(status_code=400, detail="Empty message")
-    normalized = normalize_text(user_text)
-    print(normalized)
-    # emotion=predict_emotion(normalized["english_text"])
-    emotion="Depressed"
-    # print("Emotion Detected:",emotion)
-    async def stream():
-        result = await process_user_message(
-            emotion=emotion,
-            conversation_id=id,
-            normalized_text=normalized,
-            user_text=user_text,
-            user=user,
-            db=db,
-        )
-
-        yield f"data: {json.dumps({'content': result['reply'], 'done': True})}\n\n"
-
-    return StreamingResponse(
-        stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-        }
-    )
-
-
-
-    
-@router.delete("/{id}")
-def delete_conversation(
-    id: str,
-    user=Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    conversation = (
-        db.query(Conversation)
-        .filter(
-            Conversation.id == id,
-            Conversation.user_id == user.id
-        )
-        .first()
-    )
-
-    if not conversation:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    db.delete(conversation)
-    db.commit()
-
-    return {"success": True}

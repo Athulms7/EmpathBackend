@@ -3,6 +3,7 @@ import json
 import requests
 import os
 from app.core.config import settings
+from groq import Groq
 
 LLAMA_URL = "http://localhost:8081/completion"
 
@@ -64,42 +65,53 @@ def call_mistral(prompt: str) -> str:
     return data.get("content", "").strip()
 
 
-# OPENROUTER_API_KEY = settings.OPENROUTER_API_KEY
-# OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# def call_mistral(prompt: str) -> str:
+# Load from environment variable
+from app.core.config import settings
+
+client = Groq(api_key=settings.GROQ_API_KEY)
+
+
+def call_groq(prompt: str, temperature: float = 0.3) -> str:
+    response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+            {"role": "system", "content": "You are a neutral legal incident summarizer."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=temperature,
+    )
+
+    return response.choices[0].message.content
+
+
+# import google.generativeai as genai
+# import os
+
+# # Set API key from environment variable
+# genai.configure(api_key=settings.GEMINI_API_KEY)
+
+# def call_gemini(prompt: str, temperature: float = 0.3) -> str:
+#     """
+#     Simple Gemini text generation wrapper.
+#     """
+
 #     try:
-#         print("In openai call_mistral")
-#         response = requests.post(
-#             "https://openrouter.ai/api/v1/chat/completions",
-#             headers={
-#                 "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-#                 "Content-Type": "application/json",
-#             },
-#             json={
-#                 "model": "mistralai/mistral-7b-instruct:free",
-#                 "messages": [{"role": "user", "content": prompt}],
-#             },
-#             timeout=20,
+#         model = genai.GenerativeModel("gemini-1.5-flash")
+
+#         response = model.generate_content(
+#             prompt,
+#             generation_config={
+#                 "temperature": temperature,
+#                 "max_output_tokens": 800,
+#             }
 #         )
 
-#         if response.status_code != 200:
-#             print("⚠️ OpenRouter non-200:", response.status_code)
+#         if not response.text:
 #             return ""
 
-#         data = response.json()
-#         content = (
-#             data.get("choices", [{}])[0]
-#             .get("message", {})
-#             .get("content", "")
-#             .strip()
-#         )
-
-#         if not content:
-#             print("⚠️ OpenRouter returned empty output")
-
-#         return content
+#         return response.text.strip()
 
 #     except Exception as e:
-#         print("⚠️ OpenRouter call failed:", e)
+#         print("⚠️ Gemini call failed:", e)
 #         return ""

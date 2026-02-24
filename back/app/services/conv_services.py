@@ -1,5 +1,6 @@
 
 import json
+from app.services.pine_service import retrieve_legal_context
 from fastapi import HTTPException
 
 from sqlalchemy.orm import Session
@@ -12,7 +13,7 @@ from app.services.incident_service import INCIDENT_TEMPLATE
 from app.services.incident_service import  merge_entities
 from app.services.incident_service import completion_percentage
 from app.llm.incident_assistant import generate_next_question,extract_entities
-from app.services.ai_service import call_mistral
+from app.services.ai_service import call_groq, call_mistral
 from app.llm.incident_assistant import empathetic_response
 from langdetect import detect
 from deep_translator import GoogleTranslator
@@ -53,6 +54,7 @@ async def process_user_message(
         db.refresh(incident)
 
     # 4️⃣ Extract + merge entities
+    print("BEFORE:", incident.data)
     extracted = extract_entities(normalized_text, incident.data)
     incident.data = merge_entities(dict(incident.data), extracted)
     incident.completion_percentage = completion_percentage(incident.data)
@@ -60,10 +62,10 @@ async def process_user_message(
     db.add(incident)
     db.commit()
     db.refresh(incident)
-
+    print("AFTER:", incident.data)
     # 🔹 INTAKE PHASE
     if incident.completion_percentage < 0.7:
-        question = generate_next_question(incident.data)
+        question = generate_next_question(incident.data,user_text)
         if question:
             db.add(Message(
                 conversation_id=conversation_id,
@@ -79,15 +81,31 @@ async def process_user_message(
 
     # 🔹 SUMMARY PHASE
     if not incident.case_summary:
+       # Step 1: Retrieve legal context from Pinecone
+        legal_context = retrieve_legal_context(incident.data)
+        print(legal_context)
         prompt = f"""
-Generate a clear, neutral, factual summary of the case.
-Do not assume missing information.
+You are a legal summarizer.
+
+Task:
+Generate a clear, neutral, factual legal summary.
+
+Rules:
+- Do NOT assume missing facts
+- Use structured, professional language
+- Incorporate relevant legal context if applicable
+- Keep it objective
 
 Incident Data:
 {json.dumps(incident.data, indent=2)}
+
+Relevant Legal Context:
+{legal_context}
+
+Generate the final legal summary.
 """
 
-        summary = call_mistral(prompt).strip()
+        summary = call_groq(prompt).strip()
         if not summary:
             summary = (
                 "Based on the information shared, a partial incident summary "
