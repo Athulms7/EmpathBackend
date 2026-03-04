@@ -107,12 +107,14 @@ async def send_message(
     if not user_text:
         raise HTTPException(status_code=400, detail="Empty message")
     normalized = normalize_text(user_text)
+    detected_lang=normalized["language"]
     print(normalized)
     emotion=predict_emotion(normalized["english_text"])
     # emotion="Depressed"
     print("Emotion Detected:",emotion)
     async def stream():
         result = await process_user_message(
+            detected_lang=detected_lang,
             emotion=emotion,
             conversation_id=id,
             normalized_text=normalized,

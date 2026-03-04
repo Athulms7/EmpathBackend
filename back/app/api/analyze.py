@@ -7,10 +7,13 @@ from app.api.deps import get_current_user
 
 # 🔁 Shared message pipeline
 from app.services.message_service import handle_text_message
+from app.services.conv_services import process_user_message
 
 # ===== ML pipelines =====
 from app.llm.huberta import predict_speech_emotion
 from app.llm.roberta import predict_emotion
+
+from app.models import Message
 
 # ===== ASR + Translation =====
 import whisper
@@ -97,30 +100,39 @@ async def analyze_audio(
             temperature=0       # More stable decoding
         )
 
-        final_text = result["text"].strip()
-
-        transcribed_text=final_text
+        transcribed_text=result["text"].strip()
+        detected_lang = result["language"]
+        print("language",detected_lang)
+        
         if not transcribed_text:
             raise HTTPException(status_code=400, detail="Empty transcription")
-        print("final",final_text)
+        if detected_lang == "ml":
+            print("translating eng to ml audio user text")
+            original_text = GoogleTranslator(
+                        source="en",
+                        target="ml"
+                    ).translate(transcribed_text)  
+        else:
+            original_text=transcribed_text      
         # 2️⃣ Emotion
         # emotion = predict_speech_emotion(temp_file)
         # print("Emotion Detected:",emotion)
         emotion="Depressed"
-        # 3️⃣ Process message (same as text)
-        normalized_text = normalize_text(final_text)
+        
+        normalized_text = normalize_text(transcribed_text)
         print("norm",normalized_text)
         result = await process_user_message(
+            detected_lang=detected_lang,
             emotion=emotion,
             conversation_id=conversation_id,
-            user_text=transcribed_text,
+            user_text=original_text,
             normalized_text=normalized_text,
             user=user,
             db=db,
         )
 
         assistant_reply = result["reply"]
-
+            
         # 4️⃣ STREAM RESPONSE (SSE)
         async def event_generator():
             # Optional: send transcription to frontend
@@ -249,7 +261,6 @@ async def analyze_audio(
 #         if os.path.exists(temp_file):
 #             os.remove(temp_file)
 
-from app.services.conv_services import process_user_message
 # @router.post("/{conversation_id}/audio")
 # async def analyze_audio(
 #     conversation_id: str,

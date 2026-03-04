@@ -19,6 +19,7 @@ from langdetect import detect
 from deep_translator import GoogleTranslator
 async def process_user_message(
     *,
+    detected_lang:str,
     emotion:str,
     conversation_id: str,
     normalized_text:str,
@@ -67,17 +68,33 @@ async def process_user_message(
     if incident.completion_percentage < 0.7:
         question = generate_next_question(incident.data,user_text)
         if question:
+            reply = question
+
+            if detected_lang == "ml":
+                reply = GoogleTranslator(source="en", target="ml").translate(reply)
+
             db.add(Message(
                 conversation_id=conversation_id,
                 role="assistant",
-                content=question
+                content=reply
             ))
             db.commit()
 
-        return {
-            "phase": "intake",
-            "reply": question
-        }
+            return {
+                "phase": "intake",
+                "reply": reply
+            }
+        #     db.add(Message(
+        #         conversation_id=conversation_id,
+        #         role="assistant",
+        #         content=question
+        #     ))
+        #     db.commit()
+
+        # return {
+        #     "phase": "intake",
+        #     "reply": question
+        # }
 
     # 🔹 SUMMARY PHASE
     if not incident.case_summary:
