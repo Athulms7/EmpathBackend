@@ -1,9 +1,10 @@
-import json
-from app.services.ai_service import call_groq
+import logging
+
 from sentence_transformers import SentenceTransformer
-import os
 from app.core.config import settings
 from pinecone import Pinecone
+
+logger = logging.getLogger(__name__)
 
 # Initialize Pinecone
 pc = Pinecone(
@@ -23,36 +24,23 @@ def embed_text(text: str) -> list[float]:
     try:
         vector = model.encode(text)
         return vector.tolist()
-    except Exception as e:
-        print("⚠️ Embedding failed:", e)
+    except Exception:
+        logger.exception("Embedding generation failed")
         return []
     
-def generate_vector_query_with_gemini(incident_data: dict) -> str:
-    prompt = f"""
-You are a legal information retrieval assistant.
-
-Convert structured incident data into a strong semantic legal search query.
-
-Rules:
-- Use legal terminology
-- Do NOT invent missing information
-- Ignore unknown/null fields
-- 1–3 sentences only
-
-Incident Data:
-{json.dumps({k: v for k, v in incident_data.items() if v is not None}, indent=2)}
-
-Output only the search query text.
-"""
-
-    query_text = call_groq(prompt, temperature=0.2)
-
-    if not query_text:
-        query_text = "Relevant legal provisions for reported incident."
-
-    return query_text
-
-
+def build_legal_search_query(incident_data: dict) -> str:
+    internal_fields = {"asked_fields", "question_attempts", "final_question_asked"}
+    query_fields = {
+        key: value
+        for key, value in incident_data.items()
+        if key not in internal_fields
+        and value is not None
+        and value != ""
+        and value != []
+        and value != {}
+        and not (isinstance(value, str) and value.lower() == "unknown")
+    }
+    return "; ".join(f"{key.replace('_', ' ')}: {value}" for key, value in query_fields.items())
 
 
 def retrieve_legal_context(incident_data: dict) -> str:
@@ -60,8 +48,8 @@ def retrieve_legal_context(incident_data: dict) -> str:
     Generate semantic search query → embed → retrieve top legal contexts.
     """
 
-    # Step 1: Smart legal query from Gemini
-    query_text = generate_vector_query_with_gemini(incident_data)
+    # Build the query directly to avoid an extra model round trip.
+    query_text = build_legal_search_query(incident_data)
 
     # Step 2: Convert to embedding
     vector = embed_text(query_text)

@@ -2,18 +2,23 @@
 Central LLM logic for IncidentDB assistant
 
 Responsibilities:
-1. Extract structured entities from user messages
-2. Ask targeted follow-up questions if data is incomplete
-3. Generate a final contextual case summary
+1. Extract structured entities
+2. Infer context automatically
+3. Ask intelligent follow-up questions
+4. Generate empathetic responses
+5. Produce incident summaries
 """
 
-# -----------------------------
-# 1️⃣ ENTITY EXTRACTION (Mistral role)
-# -----------------------------
 import json
 import requests
-from app.services.ai_service import call_groq, call_mistral 
+from app.services.ai_service import call_mistral
+
 LLAMA_URL = "http://localhost:8081/completion"
+
+
+# -----------------------------
+# ENTITY SCHEMA
+# -----------------------------
 
 ENTITY_KEYS = [
     "suspect",
@@ -35,70 +40,60 @@ ENTITY_KEYS = [
 ]
 
 
+# -----------------------------
+# ENTITY EXTRACTION
+# -----------------------------
+
 def extract_entities(message: str, current_state: dict) -> dict:
-    """
-    Uses Mistral to extract structured entities.
-    Returns PARTIAL JSON (only detected fields).
-    """
 
     prompt = f"""
 You are an information extraction system.
 
-TASK:
-Extract entities from the user message.
+Extract structured information from the message.
 
-RULES:
-- Return ONLY valid JSON
-- Extract entities if explicitly stated
-- Extract entities if implicitly clear
-- Do NOT guess
+RULES
+- Return ONLY JSON
+- Do not guess
 - Omit fields not mentioned
 
-ALLOWED KEYS:
+Allowed keys:
 {ENTITY_KEYS}
 
-EXAMPLES:
+For medium ONLY allow:
+"physical" or "online"
 
-User: "He threatened me at my house"
+Examples:
+
+User: "He hit me"
 Output:
-{{"crime_location": "user residence"}}
+{{"medium":"physical"}}
 
-User: "He threatened me at the office"
+User: "He sent threatening messages"
 Output:
-{{"crime_location": "workplace"}}
+{{"medium":"online"}}
 
-User: "He threatened me"
-Output:
-{{}}
-
-USER MESSAGE:
+User message:
 "{message}"
 
-OUTPUT JSON ONLY:
+Return JSON only.
 """
-
 
     payload = {
         "prompt": f"<s>[INST] {prompt} [/INST]",
         "n_predict": 300,
-        "temperature": 0.0,   # 🔴 CRITICAL: prevents guessing
+        "temperature": 0.0,
         "top_p": 0.9,
     }
 
     try:
-        response = requests.post(LLAMA_URL, json=payload, timeout=120)
-        response.raise_for_status()
 
+        response = requests.post(LLAMA_URL, json=payload, timeout=120)
         raw = response.json().get("content", "").strip()
 
-        # 🧹 Clean common LLM mistakes
         raw = raw.replace("```json", "").replace("```", "").strip()
-        print("LLM RAW OUTPUT:", raw)
-        
-        data = json.loads(raw)
-        print("PARSED JSON:", data)
 
-        # 🛡️ Safety filter: only allow known keys
+        data = json.loads(raw)
+
         extracted = {
             k: v for k, v in data.items()
             if k in ENTITY_KEYS and v is not None
@@ -107,254 +102,254 @@ OUTPUT JSON ONLY:
         return extracted
 
     except Exception as e:
-        # NEVER crash the pipeline
         print("Entity extraction failed:", e)
         return {}
 
 
-
 # -----------------------------
-# 2️⃣ FOLLOW-UP QUESTIONING (Mistral role)
+# NORMALIZE ENTITIES
 # -----------------------------
 
-def ask_question(incident_data: dict) -> str | None:
-    asked = incident_data.get("asked_fields", [])
+def normalize_entities(data: dict):
 
-    priority_questions = [
-        ("crime_location", "Where does this incident usually take place?"),
-        ("time_period", "When did this situation first begin?"),
-        ("frequency", "How often does this happen?"),
-        ("witnesses", "Was anyone else present or aware of what happened?"),
-        ("evidence_available", "Do you have any evidence such as messages or recordings?"),
-        ("injury_present", "Have you been physically injured in any way?")
+    if "injury_present" in data:
+        val = str(data["injury_present"]).lower()
+        data["injury_present"] = val in ["yes", "true"]
+
+    if "identity_known" in data:
+        if data["identity_known"]:
+            data["identity_known"] = True
+
+    if data.get("relationship_to_accused") == "spouse":
+        data["relationship_to_accused"] = "husband"
+
+    return data
+
+
+def apply_context_rules(incident_data: dict, message: str):
+
+    text = message.lower()
+
+    physical_keywords = [
+        "hit","beat","beaten","slap","punched","kick",
+        "assault","violence","hurt","abuse","torture",
+        "ragging","bully","bullying","body shaming",
+        "forced","humiliated"
     ]
 
-    for field, question in priority_questions:
-        if incident_data.get(field) is None and field not in asked:
-            # 🔴 REASSIGN list (not append)
-            incident_data["asked_fields"] = asked + [field]
-            return question
+    online_keywords = [
+        "message","text","chat","instagram",
+        "facebook","email","online","whatsapp",
+        "telegram","snapchat"
+    ]
 
-    # Final general question
-    if not incident_data.get("final_question_asked", False):
-        incident_data["final_question_asked"] = True
-        return (
-            "Is there anything else you’d like to share that you think is important "
-            "or that we haven’t discussed yet?"
-        )
+    # Only set if clearly physical
+    if any(word in text for word in physical_keywords):
+        incident_data["medium"] = "physical"
+
+    # Only set if clearly online
+    elif any(word in text for word in online_keywords):
+        incident_data["medium"] = "online"
+
+    # Otherwise DO NOTHING (leave medium None)
+
+    # Relationship inference
+    if "husband" in text:
+        incident_data["relationship_to_accused"] = "husband"
+
+    if "senior" in text or "seniors" in text:
+        incident_data["relationship_to_accused"] = "senior students"
+
+    if "boss" in text:
+        incident_data["relationship_to_accused"] = "employer"
+        incident_data["workplace_related"] = True
+
+# -----------------------------
+# INCIDENT TYPE DETECTION
+# -----------------------------
+
+def detect_incident_type(message: str, data: dict):
+
+    text = message.lower()
+
+    if data.get("relationship_to_accused") in ["husband","wife","partner"]:
+        return "domestic_violence"
+
+    if data.get("workplace_related"):
+        return "workplace_harassment"
+
+    if data.get("medium") == "online":
+        return "online_harassment"
+
+    if data.get("medium") == "physical":
+        return "physical_assault"
+
+    return "unknown"
+
+
+# -----------------------------
+# FOLLOW-UP QUESTIONS
+# -----------------------------
+
+QUESTION_BANK = {
+
+    "domestic_violence": [
+        ("crime_location","Where do these incidents usually happen?"),
+        ("frequency","How often has this been happening?"),
+        ("shared_residence","Do you currently live in the same residence?")
+    ],
+
+    "physical_assault":[
+        ("crime_location","Where did this incident take place?"),
+        ("witnesses","Did anyone see what happened?")
+    ],
+
+    "online_harassment":[
+        ("evidence_available","Do you still have the messages or screenshots?")
+    ],
+
+    "unknown":[
+        ("crime_location","Where did this incident happen?"),
+        ("time_period","When did this start?")
+    ]
+}
+
+
+def ask_question(incident_data: dict):
+
+    asked = incident_data.get("asked_fields", [])
+
+    incident_type = incident_data.get("incident_type","unknown")
+
+    questions = QUESTION_BANK.get(incident_type, QUESTION_BANK["unknown"])
+
+    for field, question in questions:
+
+        if incident_data.get(field) is None and field not in asked:
+
+            incident_data["asked_fields"] = asked + [field]
+
+            return question
 
     return None
 
 
-
 # -----------------------------
-# 3️⃣ CASE SUMMARY (Gemini / GPT role)
+# EMPATHETIC RESPONSE
 # -----------------------------
 
-def summarize_incident(data: dict) -> str:
-    """
-    Generate a neutral, factual case summary.
-    Replace with Gemini / GPT call later.
-    """
+def generate_next_question(incident_data: dict, user_text: str, emotion: str):
 
-    parts = []
+    question = ask_question(incident_data)
 
-    if data.get("relationship_to_accused"):
-        parts.append(
-            f"The incident involves a {data['relationship_to_accused']}."
-        )
-
-    if data.get("medium"):
-        parts.append(
-            f"The actions primarily occurred through {data['medium']} communication."
-        )
-
-    if data.get("frequency"):
-        parts.append(
-            f"The behavior occurred {data['frequency']}."
-        )
-
-    if data.get("threat_present") is True:
-        parts.append("Threatening behavior has been reported.")
-
-    if data.get("injury_present") is True:
-        parts.append("Physical injury has been reported.")
-
-    if data.get("ongoing") is True:
-        parts.append("The situation is ongoing.")
-
-    if not parts:
-        return "The user has reported an incident and further details are being collected."
-
-    return " ".join(parts)
-
-# def generate_next_question(incident_data: dict) -> str | None:
-#     asked = incident_data.get("asked_fields", [])
-
-#     # 🔴 EXCLUDE ALREADY ASKED FIELDS
-#     missing = [
-#         k for k, v in incident_data.items()
-#         if v is None
-#         and k not in asked
-#         and k not in ("asked_fields", "final_question_asked")
-#     ]
-
-#     if not missing:
-#         return None
-
-#     # Choose the MOST IMPORTANT missing field (first is OK for now)
-#     field_to_ask = missing[0]
-
-#     prompt = f"""
-# You are a calm, empathetic legal intake assistant.
-
-# Missing information:
-# {missing}
-
-# Instructions:
-# - Ask ONLY ONE question
-# - Ask specifically about: "{field_to_ask}"
-# - Be empathetic and non-judgmental
-# - Do NOT mention databases or fields
-
-# Ask a natural human question to collect it.
-# """
-
-#     question = call_groq(prompt).strip()
-#     print("RAW MISTRAL OUTPUT:", repr(question))
-#     # 🔴 IMPORTANT: reassign list (not append)
-#     incident_data["asked_fields"] = asked + [field_to_ask]
-    
-#     return question
-
-def generate_next_question(incident_data: dict, user_text: str) -> str | None:
-    attempts = incident_data.get("question_attempts", {})
-
-    missing = [
-        k for k, v in incident_data.items()
-        if v is None
-        and k not in ("asked_fields", "question_attempts", "final_question_asked")
-    ]
-
-    if not missing:
-        return None
-
-    # Pick highest priority missing field
-    field_to_ask = None
-
-    for field in missing:
-        if attempts.get(field, 0) < 2:
-            field_to_ask = field
-            break
-
-    if not field_to_ask:
-        return None
-    
-    field_attempts = attempts.get(field_to_ask, 0)
+    if not emotion:
+        emotion = "distress"
 
     prompt = f"""
-You are a calm, empathetic legal intake assistant.
+You are a compassionate counselor.
 
-User just said:
+User message:
 "{user_text}"
 
+Detected emotion:
+{emotion}
+
 Known case data:
-{json.dumps({k: v for k, v in incident_data.items() if v is not None}, indent=2)}
+{json.dumps({k:v for k,v in incident_data.items() if v is not None}, indent=2)}
 
-Missing information:
-{missing}
+Respond with empathy.
 
-Instructions:
-- First respond briefly to the user's last message.
-- Then ask ONE natural follow-up question about "{field_to_ask}".
-- If this is the second attempt, rephrase the question differently.
-- Be formal but compassionate.
-- Do not mention databases or field names.
-- Do not ask multiple questions.
+First acknowledge the user's feelings.
+
+Then reassure them they can speak at their own pace.
+
+Then naturally ask:
+
+"{question}"
+
+Rules:
+- No numbering
+- No bullet points
+- Sound human
+- Keep response under 4 sentences
 """
 
-    question = call_groq(prompt).strip()
+    return call_mistral(prompt).strip()
 
-    # Update tracking
-    attempts[field_to_ask] = field_attempts + 1
-    incident_data["question_attempts"] = attempts
 
-    return question
-#this also works but with a check to give answer even without qns..
-# def generate_next_question(incident_data: dict) -> str | None:
-#     asked = incident_data.get("asked_fields", [])
+# -----------------------------
+# EMPATHETIC SUPPORT (Fix ImportError)
+# -----------------------------
 
-#     missing = [
-#         k for k, v in incident_data.items()
-#         if v is None
-#         and k not in asked
-#         and k not in ("asked_fields", "final_question_asked")
-#     ]
+def empathetic_response(user_text: str, incident_summary: str):
 
-#     if not missing:
-#         return None
-
-#     field_to_ask = missing[0]
-
-#     prompt = f"""
-# You are a human legal intake assistant.
-
-# IMPORTANT RULES:
-# - Respond ONLY in plain English.
-# - DO NOT return JSON.
-# - DO NOT return key-value pairs.
-# - DO NOT return structured data.
-# - Ask exactly ONE question.
-# - Do NOT explain anything.
-
-# You need to collect information about: {field_to_ask}
-
-# Example:
-# If the missing field is "incident_date", you should respond:
-# "When did the incident occur?"
-
-# Now generate the question.
-# """
-
-#     question = call_mistral(prompt).strip()
-
-#     print("RAW MISTRAL OUTPUT:", repr(question))
-
-#     # 🚨 If model still outputs JSON → fallback
-#     if question.startswith("{") or ":" in question:
-#         fallback_map = {
-#             "incident_date": "When did the incident occur?",
-#             "location": "Where did the incident happen?",
-#             "description": "Could you describe what happened?",
-#             "identity_known": "Do you know who the person was?",
-#             "crime_type": "Can you clarify what type of incident occurred?",
-#         }
-#         question = fallback_map.get(
-#             field_to_ask,
-#             "Could you please provide more details?"
-#         )
-
-#     incident_data["asked_fields"] = asked + [field_to_ask]
-
-#     return question
-
-def empathetic_response(user_text: str, incident_summary: str) -> str:
     prompt = f"""
 You are a compassionate emotional support assistant.
 
-Context of what the user has been through:
+Context:
 {incident_summary}
 
 User message:
 "{user_text}"
 
-Instructions:
-- Respond with empathy and understanding
-- Validate the user’s feelings
-- Do NOT give legal advice unless asked
-- Do NOT interrogate
-- Offer gentle support or reflection
-- Ask at most one optional open-ended question
+Respond with empathy and validation.
+
+Do not interrogate.
+Ask at most one gentle question.
 """
 
     return call_mistral(prompt).strip()
+
+
+# -----------------------------
+# INCIDENT SUMMARY
+# -----------------------------
+
+def summarize_incident(data: dict):
+
+    parts = []
+
+    if data.get("relationship_to_accused"):
+        parts.append(f"The incident involves the user's {data['relationship_to_accused']}.")
+
+    if data.get("medium"):
+        parts.append(f"The incident occurred through {data['medium']} interaction.")
+
+    if data.get("frequency"):
+        parts.append(f"The behavior occurred {data['frequency']}.")
+
+    if data.get("injury_present"):
+        parts.append("Physical injury has been reported.")
+
+    if data.get("ongoing"):
+        parts.append("The situation appears ongoing.")
+
+    if not parts:
+        return "An incident has been reported and further details are being collected."
+
+    return " ".join(parts)
+
+
+# -----------------------------
+# MAIN PIPELINE
+# -----------------------------
+
+def process_user_message(message: str, incident_data: dict, emotion: str):
+
+    extracted = extract_entities(message, incident_data)
+
+    extracted = normalize_entities(extracted)
+
+    incident_data.update(extracted)
+
+    apply_context_rules(incident_data, message)
+
+    incident_data["incident_type"] = detect_incident_type(message, incident_data)
+
+    response = generate_next_question(
+        incident_data,
+        message,
+        emotion
+    )
+
+    return response

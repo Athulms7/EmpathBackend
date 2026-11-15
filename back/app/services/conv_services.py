@@ -17,7 +17,7 @@ from app.services.ai_service import call_groq, call_mistral
 from app.llm.incident_assistant import empathetic_response
 from langdetect import detect
 from deep_translator import GoogleTranslator
-async def process_user_message(
+def process_user_message(
     *,
     detected_lang:str,
     emotion:str,
@@ -27,12 +27,10 @@ async def process_user_message(
     user,
     db: Session,
 ):
-    # 1️⃣ Validate conversation
     conversation = db.query(Conversation).filter_by(id=conversation_id).first()
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # 2️⃣ Save USER message
     db.add(Message(
         conversation_id=conversation_id,
         role="user",
@@ -40,7 +38,6 @@ async def process_user_message(
     ))
     db.commit()
 
-    # 3️⃣ Load or create Incident
     incident = db.query(Incident).filter_by(
         conversation_id=conversation_id
     ).first()
@@ -54,8 +51,6 @@ async def process_user_message(
         db.commit()
         db.refresh(incident)
 
-    # 4️⃣ Extract + merge entities
-    print("BEFORE:", incident.data)
     extracted = extract_entities(normalized_text, incident.data)
     incident.data = merge_entities(dict(incident.data), extracted)
     incident.completion_percentage = completion_percentage(incident.data)
@@ -63,10 +58,8 @@ async def process_user_message(
     db.add(incident)
     db.commit()
     db.refresh(incident)
-    print("AFTER:", incident.data)
-    # 🔹 INTAKE PHASE
     if incident.completion_percentage < 0.7:
-        question = generate_next_question(incident.data,user_text)
+        question = generate_next_question(incident.data,user_text,emotion)
         if question:
             reply = question
 
@@ -96,11 +89,9 @@ async def process_user_message(
         #     "reply": question
         # }
 
-    # 🔹 SUMMARY PHASE
     if not incident.case_summary:
-       # Step 1: Retrieve legal context from Pinecone
+        # Retrieve legal context from Pinecone.
         legal_context = retrieve_legal_context(incident.data)
-        print(legal_context)
         prompt = f"""
 You are a legal summarizer.
 
@@ -144,7 +135,6 @@ Generate the final legal summary.
             "reply": summary
         }
 
-    # 🔹 SUPPORT / EMPATHY PHASE
     reply = empathetic_response(user_text, incident.case_summary)
 
     db.add(Message(

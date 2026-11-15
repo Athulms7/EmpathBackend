@@ -4,23 +4,18 @@ import os
 from transformers import AutoFeatureExtractor, HubertForSequenceClassification
 
 # ================= CONFIG =================
-MODEL_DIR = "F:\empathai_ser_model_hubert"
+MODEL_DIR = r"F:\empathai_ser_model_hubert"
 TARGET_SR = 16000
 # ==========================================
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ===== LOAD ONCE =====
-print("🔹 Loading SER feature extractor...")
 feature_extractor = AutoFeatureExtractor.from_pretrained(MODEL_DIR)
 
-print("🔹 Loading SER model...")
 model = HubertForSequenceClassification.from_pretrained(MODEL_DIR)
 model.to(device)
 model.eval()
-
-print(f"✅ SER model loaded on {device}")
-
 
 def predict_speech_emotion(audio_path: str) -> str:
     """

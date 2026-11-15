@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends,HTTPException
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -24,7 +25,6 @@ from app.llm.roberta import predict_emotion
 from app.services.conv_services import normalize_text, process_user_message
 import json
 import requests
-import asyncio
 
 LLAMA_URL = "http://localhost:8081/completion"
 def call_llama(user_message: str, mode: str ) -> str:
@@ -106,18 +106,17 @@ async def send_message(
     user_text = body.get("content", "").strip()
     if not user_text:
         raise HTTPException(status_code=400, detail="Empty message")
-    normalized = normalize_text(user_text)
+    normalized = await run_in_threadpool(normalize_text, user_text)
     detected_lang=normalized["language"]
-    print(normalized)
-    emotion=predict_emotion(normalized["english_text"])
+    emotion = await run_in_threadpool(predict_emotion, normalized["english_text"])
     # emotion="Depressed"
-    print("Emotion Detected:",emotion)
     async def stream():
-        result = await process_user_message(
+        result = await run_in_threadpool(
+            process_user_message,
             detected_lang=detected_lang,
             emotion=emotion,
             conversation_id=id,
-            normalized_text=normalized,
+            normalized_text=normalized["english_text"],
             user_text=user_text,
             user=user,
             db=db,
@@ -161,124 +160,3 @@ def delete_conversation(
     return {"success": True}
 
 
-# @router.post("/{id}/messages")
-# def send_message(
-#     id: str,
-#     body: dict,
-#     user=Depends(get_current_user),
-#     db: Session = Depends(get_db),
-# ):
-#     user_text = body.get("content", "").strip()
-#     if not user_text:
-#         raise HTTPException(status_code=400, detail="Empty message")
-
-#     # 1️⃣ Validate conversation
-#     conversation = db.query(Conversation).filter_by(id=id).first()
-#     if not conversation:
-#         raise HTTPException(status_code=404, detail="Conversation not found")
-
-#     # 2️⃣ Save USER message
-#     db.add(Message(
-#         conversation_id=id,
-#         role="user",
-#         content=user_text
-#     ))
-#     db.commit()
-
-#     # 3️⃣ Load or create Incident
-#     incident = db.query(Incident).filter_by(conversation_id=id).first()
-#     if not incident:
-#         incident = Incident(
-#             conversation_id=id,
-#             data=INCIDENT_TEMPLATE.copy()
-#         )
-#         db.add(incident)
-#         db.commit()
-#         db.refresh(incident)
-
-#     # 4️⃣ Extract + merge entities (FIRST MESSAGE INCLUDED)
-#     extracted = extract_entities(user_text, incident.data)
-#     incident.data = merge_entities(dict(incident.data), extracted)
-#     incident.completion_percentage = completion_percentage(incident.data)
-#     db.add(incident)
-#     db.commit()
-#     db.refresh(incident)
-
-#     # ----------------------------------------------------
-#     # STREAMING GENERATOR (SSE)
-#     # ----------------------------------------------------
-#     async def stream():
-
-#         # 🔹 INTAKE PHASE
-#         if incident.completion_percentage < 0.7:
-#             question = generate_next_question(incident.data)
-
-#             db.add(incident)
-#             db.commit()
-#             db.refresh(incident)
-
-#             if question:
-#                 db.add(Message(
-#                     conversation_id=id,
-#                     role="assistant",
-#                     content=question
-#                 ))
-#                 db.commit()
-
-#             yield f"data: {json.dumps({'content': question or '', 'done': True})}\n\n"
-#             return
-
-#         # 🔹 SUMMARY PHASE (ONLY ONCE)
-#         if not incident.case_summary:
-#             prompt = f"""
-#         Generate a clear, neutral, factual summary of the case.
-#         Do not assume missing information.
-
-#         Incident Data:
-#         {json.dumps(incident.data, indent=2)}
-#         """
-
-#             summary = call_mistral(prompt)
-
-#             if not summary.strip():
-#                 summary = (
-#                     "Based on the information shared, a partial incident summary "
-#                     "can be prepared, though some details remain unspecified."
-#                 )
-
-#             incident.case_summary = summary.strip()
-
-#             db.add(incident)
-#             db.add(Message(
-#                 conversation_id=id,
-#                 role="assistant",
-#                 content=incident.case_summary
-#             ))
-#             db.commit()
-
-#             # send summary as a single SSE message
-#             yield f"data: {json.dumps({'content': incident.case_summary, 'done': True})}\n\n"
-#             return
-
-
-
-#         # 🔹 SUPPORT / EMPATHY PHASE (FOREVER)
-#         reply = empathetic_response(user_text, incident.case_summary)
-
-#         db.add(Message(
-#             conversation_id=id,
-#             role="assistant",
-#             content=reply
-#         ))
-#         db.commit()
-
-#         yield f"data: {json.dumps({'content': reply, 'done': True})}\n\n"
-
-#     return StreamingResponse(
-#         stream(),
-#         media_type="text/event-stream",
-#         headers={
-#             "Cache-Control": "no-cache",
-#             "Connection": "keep-alive",
-#         }
-#     )
